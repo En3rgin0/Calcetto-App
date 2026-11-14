@@ -2,6 +2,12 @@ rules_version = '2';
 // Regole Firestore di Calcetto Club.
 // Pubblicale con:  firebase deploy --only firestore:rules
 // (oppure copiale in Console Firebase → Firestore → Regole).
+//
+// Migrazione da una versione precedente dell'app:
+//  1. pubblica insieme la nuova app e queste regole;
+//  2. ogni admin apra l'app una volta: le leghe esistenti registrano da sole il codice
+//     invito in codes/ (finché non succede, il vecchio codice di quella lega non funziona);
+//  3. da Impostazioni lega → "Genera nuovo codice" l'admin può cambiare il codice quando vuole.
 service cloud.firestore {
   match /databases/{db}/documents {
 
