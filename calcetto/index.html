@@ -5,12 +5,13 @@
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta name="theme-color" content="#0b1f17">
 <link rel="manifest" href="manifest.webmanifest">
-<link rel="icon" type="image/png" href="icon-192.png">
+<link rel="icon" type="image/png" sizes="32x32" href="favicon-32.png">
+<link rel="icon" type="image/png" sizes="192x192" href="icon-192.png">
 <link rel="apple-touch-icon" href="apple-touch-icon.png">
 <meta name="description" content="Il registro dei vostri calcetti: statistiche, carte e overall da 64 a 99.">
 <meta property="og:title" content="Calcetto Club">
 <meta property="og:description" content="Statistiche, carte e overall da 64 a 99 per i vostri calcetti.">
-<meta property="og:image" content="https://subtle-choux-50ba6f.netlify.app/og-cover.png">
+<meta property="og:image" content="https://subtle-choux-50ba6f.netlify.app/og-cover.jpg">
 <meta name="twitter:card" content="summary_large_image">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
@@ -187,7 +188,13 @@ function leagueStats(lid){
 /* ---------------- Utility ---------------- */
 const $ = s => document.querySelector(s);
 const esc = s => String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-const uid = () => Math.random().toString(36).slice(2,10);
+/* argomento sicuro dentro onclick="..." (stringa JS + escape HTML) */
+const q = v => esc(JSON.stringify(String(v??'')));
+const num = v => { const n = +v; return Number.isFinite(n) ? n : 0; };
+/* i dati delle carte arrivano dal database e possono essere stati scritti da chiunque: si mostrano solo se validi */
+const safePhoto = p => typeof p==='string' && p.length<150000 && /^data:image\/(jpeg|png|webp);base64,[A-Za-z0-9+/=]+$/.test(p) ? p : '';
+const safeEmoji = e => EMOJIS.includes(e) ? e : '⚽';
+const uid = () =>Math.random().toString(36).slice(2,10);
 const mkCode = () => Array.from({length:6},()=> 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'[Math.floor(Math.random()*32)]).join('');
 const toast = t => { const e=document.createElement('div'); e.className='toast'; e.textContent=t; document.body.appendChild(e); setTimeout(()=>e.remove(),2600); };
 const THEMES = {
@@ -229,20 +236,48 @@ const Local = {
   async fixtures(l){ return Object.values((this.load().fixtures||{})[l]||{}) },
   async saveFixture(l,f){ const d=this.load(); d.fixtures=d.fixtures||{}; (d.fixtures[l]=d.fixtures[l]||{})[f.id]=f; this.save(d); },
   async delFixture(l,id){ const d=this.load(); if(d.fixtures&&d.fixtures[l]) delete d.fixtures[l][id]; this.save(d); },
+  async joinByCode(c,u){ const d=this.load(), l=Object.values(d.leagues).find(x=>x.code===c); if(!l) return null; if(!l.memberIds.includes(u)) l.memberIds.push(u); this.save(d); return l; },
+  async addAdmin(lid,u){ const d=this.load(), l=d.leagues[lid]; if(!l.admins.includes(u)) l.admins.push(u); this.save(d); },
+  async removeAdmin(lid,u){ const d=this.load(), l=d.leagues[lid]; l.admins=l.admins.filter(x=>x!==u); this.save(d); },
+  async kick(lid,u){ const d=this.load(), l=d.leagues[lid]; l.memberIds=l.memberIds.filter(x=>x!==u); l.admins=l.admins.filter(x=>x!==u); this.save(d); },
+  async codeFree(c){ return !Object.values(this.load().leagues).some(l=>l.code===c) },
+  async ensureCode(){ return true },
+  async setCode(lid,code){ await this.patchLeague(lid,{code}) },
 };
 let DB = Local, fb = null;
 async function initFirebase(){
   const V='10.12.2', base=`https://www.gstatic.com/firebasejs/${V}/`;
   const [app,auth,fs] = await Promise.all([import(base+'firebase-app.js'),import(base+'firebase-auth.js'),import(base+'firebase-firestore.js')]);
-  const a = app.initializeApp(FIREBASE_CONFIG), au = auth.getAuth(a), db = fs.getFirestore(a);
+  const a = app.initializeApp(FIREBASE_CONFIG), au = auth.getAuth(a);
+  let db;   /* cache locale: avvio più veloce e meno letture; se il browser non la supporta si usa quella in memoria */
+  try{ db = fs.initializeFirestore(a,{localCache:fs.persistentLocalCache({tabManager:fs.persistentMultipleTabManager()})}); }
+  catch(e){ console.warn(e); db = fs.getFirestore(a); }
   fb = {auth,au,fs};
-  const {doc,getDoc,setDoc,getDocs,collection,query,where,deleteDoc} = fs;
+  const {doc,getDoc,setDoc,updateDoc,getDocs,collection,query,where,deleteDoc,writeBatch,arrayUnion,arrayRemove} = fs;
   DB = {
     async getUser(id){ const s=await getDoc(doc(db,'users',id)); return s.exists()?s.data():null },
     async setUser(id,u){ await setDoc(doc(db,'users',id),u,{merge:true}) },
     async leaguesOf(id){ const s=await getDocs(query(collection(db,'leagues'),where('memberIds','array-contains',id))); return s.docs.map(d=>d.data()) },
     async saveLeague(l){ await setDoc(doc(db,'leagues',l.id),l) },
-    async findByCode(c){ const s=await getDocs(query(collection(db,'leagues'),where('code','==',c))); return s.docs[0]?.data()||null },
+    /* Ingresso con codice: codes/{CODICE} → id lega. Nello stesso batch si scrive la "prova" joins/{uid} con il codice,
+       che le regole confrontano con quello della lega: senza codice giusto non si entra. */
+    async joinByCode(c,u){
+      const s=await getDoc(doc(db,'codes',c)); if(!s.exists()) return null;
+      const lid=s.data().lid, b=writeBatch(db);
+      b.set(doc(db,'leagues',lid,'joins',u),{code:c,ts:Date.now()});
+      b.update(doc(db,'leagues',lid),{memberIds:arrayUnion(u)});
+      await b.commit(); return this.getLeague(lid);
+    },
+    async addAdmin(lid,u){ await updateDoc(doc(db,'leagues',lid),{admins:arrayUnion(u)}) },
+    async removeAdmin(lid,u){ await updateDoc(doc(db,'leagues',lid),{admins:arrayRemove(u)}) },
+    async kick(lid,u){ await updateDoc(doc(db,'leagues',lid),{memberIds:arrayRemove(u),admins:arrayRemove(u)}) },
+    async codeFree(c){ return !(await getDoc(doc(db,'codes',c))).exists() },
+    /* leghe create prima di questa versione: l'admin registra il codice in codes/ al primo accesso */
+    async ensureCode(l){ const r=doc(db,'codes',l.code), s=await getDoc(r); if(!s.exists()){ await setDoc(r,{lid:l.id}); return true; } return s.data().lid===l.id; },
+    async setCode(lid,code,old){
+      await updateDoc(doc(db,'leagues',lid),{code}); await setDoc(doc(db,'codes',code),{lid});
+      if(old) await deleteDoc(doc(db,'codes',old)).catch(e=>console.warn(e));
+    },
     async members(l){ const s=await getDocs(collection(db,'leagues',l,'members')); return s.docs.map(d=>d.data()) },
     async setMember(l,m){ await setDoc(doc(db,'leagues',l,'members',m.id),m) },
     async patchMember(l,id,f){ await setDoc(doc(db,'leagues',l,'members',id),f,{merge:true}) },
@@ -250,7 +285,9 @@ async function initFirebase(){
     async getLeague(id){ const s=await getDoc(doc(db,'leagues',id)); return s.exists()?s.data():null },
     async patchLeague(id,f){ await setDoc(doc(db,'leagues',id),f,{merge:true}) },
     async delLeague(l){
-      for(const sub of ['matches','fixtures','members']){ const s=await getDocs(collection(db,'leagues',l,sub)); await Promise.all(s.docs.map(d=>deleteDoc(d.ref))); }
+      const lg = await this.getLeague(l);
+      for(const sub of ['matches','fixtures','members','joins']){ const s=await getDocs(collection(db,'leagues',l,sub)).catch(()=>({docs:[]})); await Promise.all(s.docs.map(d=>deleteDoc(d.ref))); }
+      if(lg && lg.code) await deleteDoc(doc(db,'codes',lg.code)).catch(e=>console.warn(e));
       await deleteDoc(doc(db,'leagues',l));
     },
     async matches(l){ const s=await getDocs(collection(db,'leagues',l,'matches')); return s.docs.map(d=>d.data()) },
@@ -315,7 +352,10 @@ window.acceptPrivacy = async () => {
 };
 async function loadHome(){
   S.leagues = await DB.leaguesOf(S.user.uid);
-  for(const l of S.leagues) await loadLeague(l.id);
+  await Promise.all(S.leagues.map(l=>loadLeague(l.id)));   /* in parallelo, non una lega alla volta */
+  summarize(); checkCodes();
+}
+function summarize(){
   const tot = emptyStats(), adjs = []; let rs = 0, rn = 0, mvp = 0;
   for(const l of S.leagues){
     const m = myMember(l.id); if(!m) continue;
@@ -333,16 +373,30 @@ async function loadLeague(id){
   matches.sort((a,b)=>(b.date+b.time).localeCompare(a.date+a.time));
   S.cache[id] = {members:members.map(norm),matches,fixtures};
 }
-async function refresh(lid){ await loadHome(); S.league = S.leagues.find(l=>l.id===lid)||null; }
+/* dopo una modifica ricarica solo la lega toccata, non tutte */
+async function refresh(lid){
+  const l = await DB.getLeague(lid).catch(()=>null);
+  if(l && l.memberIds.includes(S.user.uid)){ await loadLeague(lid); S.leagues = S.leagues.map(x=>x.id===lid?l:x); }
+  else { S.leagues = S.leagues.filter(x=>x.id!==lid); delete S.cache[lid]; }
+  summarize(); S.league = S.leagues.find(x=>x.id===lid)||null;
+}
+async function freeCode(){ for(let i=0;i<8;i++){ const c = mkCode(); if(await DB.codeFree(c)) return c; } throw new Error('codice'); }
+/* leghe create prima dei codici in codes/: l'admin li registra in automatico (una volta per sessione) */
+const codeChecked = new Set();
+function checkCodes(){
+  for(const l of S.leagues){ if(!isAdmin(l) || codeChecked.has(l.id)) continue; codeChecked.add(l.id);
+    DB.ensureCode(l).then(async ok => { if(ok) return; const c = await freeCode(); await DB.setCode(l.id,c); l.code = c; render(); })
+      .catch(e=>console.warn('Codice invito non registrato', e)); }
+}
 
 /* ---------------- Render ---------------- */
 function cardHTML(m, st){
-  const c = m.card||defCard(m.name), th = THEMES[c.theme]||THEMES.gold;
+  const c = m.card||defCard(m.name), th = THEMES[c.theme]||THEMES.gold, ph = safePhoto(c.photo);
   st = st || finalize(emptyStats());
   return `<div class="fcard" style="background:${th.bg};color:${th.fg}">
     <div class="fc-num">#${esc(c.num)}</div>
     <div class="fc-top"><div class="fc-ovr">${st.ovr}<small>${esc(c.pos)}</small></div>
-    <div class="fc-av">${c.photo?`<img src="${c.photo}">`:`<span>${c.emoji||'⚽'}</span>`}</div></div>
+    <div class="fc-av">${ph?`<img src="${ph}" alt="">`:`<span>${safeEmoji(c.emoji)}</span>`}</div></div>
     <div class="fc-name">${esc(c.nick||m.name)}</div>
     <div class="fc-stats"><div>${st.played}<span>PRT</span></div><div>${st.goals}<span>GOL</span></div><div>${st.assists}<span>AST</span></div><div>${st.winPct}%<span>VIT</span></div></div></div>`;
 }
@@ -359,9 +413,9 @@ function statGrid(st,who){
    <div class="stat"><b>${st.ovr<OV_MAX?OV_MAX-st.ovr:'MAX'}</b><span>Al 99</span></div>
    <div class="stat"><b>🏅 ${st.mvp||0}</b><span>MVP</span></div>
    <div class="stat"><b>${st.rn||0}</b><span>Voti ricevuti</span></div>
-   <div class="stat tap" onclick="openCal('${who}')"><b>⭐ ${st.avg==null?'–':f1(st.avg)}</b><span>Media voto 📅</span></div></div>`;
+   <div class="stat tap" onclick="openCal(${q(who)})"><b>⭐ ${st.avg==null?'–':f1(st.avg)}</b><span>Media voto 📅</span></div></div>`;
 }
-const ratingBtn = (st,who) => `<button class="btn sec" style="margin-top:10px" onclick="openCal('${who}')">⭐ Media voto: <b>${st.avg==null?'–':f1(st.avg)}</b> · ${st.rn||0} ${st.rn===1?'voto':'voti'} — apri calendario</button>`;
+const ratingBtn = (st,who) => `<button class="btn sec" style="margin-top:10px" onclick="openCal(${q(who)})">⭐ Media voto: <b>${st.avg==null?'–':f1(st.avg)}</b> · ${st.rn||0} ${st.rn===1?'voto':'voti'} — apri calendario</button>`;
 function render(){
   const app = $('#app');
   if(!S.ready){ app.innerHTML='<div class="login"><div class="logo">⚽</div><p class="mut">Caricamento…</p></div>'; return; }
@@ -399,9 +453,9 @@ function viewMe(){
    <button class="btn sec" onclick="editCard()">🎨 Personalizza la mia carta</button>
    <h2>Statistiche totali</h2>${statGrid(st,'me')}
    <h2>Per lega</h2>
-   ${S.leagues.map(l=>{ const m=myMember(l.id); if(!m) return `<div class="pl" onclick="enter('${l.id}')"><div class="nm"><b>${esc(l.name)}</b><span class="mut">Completa l'ingresso</span></div><span class="badge r">DA COMPLETARE</span></div>`;
+   ${S.leagues.map(l=>{ const m=myMember(l.id); if(!m) return `<div class="pl" onclick="enter(${q(l.id)})"><div class="nm"><b>${esc(l.name)}</b><span class="mut">Completa l'ingresso</span></div><span class="badge r">DA COMPLETARE</span></div>`;
      const s=leagueStats(l.id)[m.id];
-     return `<div class="pl" onclick="enter('${l.id}')"><div class="nm"><b>${esc(l.name)}</b><span class="mut">${s.played} partite · ${s.goals} gol · ${s.assists} assist</span></div><div class="ov">${s.ovr}</div></div>`}).join('')||'<p class="mut">Non fai ancora parte di nessuna lega.</p>'}
+     return `<div class="pl" onclick="enter(${q(l.id)})"><div class="nm"><b>${esc(l.name)}</b><span class="mut">${s.played} partite · ${s.goals} gol · ${s.assists} assist</span></div><div class="ov">${s.ovr}</div></div>`}).join('')||'<p class="mut">Non fai ancora parte di nessuna lega.</p>'}
    ${KOFI_URL?`<h2>Sostieni il progetto</h2><p class="mut">L'app è gratuita e senza pubblicità. Se ti piace, puoi offrirmi un caffè.</p><a class="btn sec" style="display:block;text-align:center;text-decoration:none;border-color:#ff5e5b" href="${esc(KOFI_URL)}" target="_blank" rel="noopener">☕ Offrimi un caffè su Ko-fi</a>`:''}
    <h2>Privacy e dati</h2>
    <a class="btn sec" style="display:block;text-align:center;text-decoration:none" href="${PRIVACY_URL}" target="_blank" rel="noopener">📄 Informativa sulla privacy</a>
@@ -411,14 +465,14 @@ function viewMe(){
 }
 function viewLeagues(){
   return `<h1>Le mie leghe</h1>
-   ${S.leagues.map(l=>`<div class="pl" onclick="enter('${l.id}')"><div class="av">🏆</div><div class="nm"><b>${esc(l.name)}${isAdmin(l)?'<span class="badge">ADMIN</span>':''}${myMember(l.id)?'':'<span class="badge r">DA COMPLETARE</span>'}</b><span class="mut">${S.cache[l.id].members.filter(m=>!m.removed).length} giocatori · ${S.cache[l.id].matches.length} partite</span></div><span class="mut">›</span></div>`).join('')||'<p class="mut">Crea una lega o unisciti con un codice invito.</p>'}
+   ${S.leagues.map(l=>`<div class="pl" onclick="enter(${q(l.id)})"><div class="av">🏆</div><div class="nm"><b>${esc(l.name)}${isAdmin(l)?'<span class="badge">ADMIN</span>':''}${myMember(l.id)?'':'<span class="badge r">DA COMPLETARE</span>'}</b><span class="mut">${S.cache[l.id].members.filter(m=>!m.removed).length} giocatori · ${S.cache[l.id].matches.length} partite</span></div><span class="mut">›</span></div>`).join('')||'<p class="mut">Crea una lega o unisciti con un codice invito.</p>'}
    <br><div class="row"><button class="btn" onclick="openModal('newLeague')">+ Crea lega</button><button class="btn sec" onclick="openModal('join')">Unisciti</button></div>`;
 }
 function ranking(){
   const members = lm().members.filter(m=>!m.removed), st = leagueStats(S.league.id);
   return members.map(m=>({m,s:st[m.id]})).sort((a,b)=>b.s.ovr-a.s.ovr||b.s.goals-a.s.goals||a.m.name.localeCompare(b.m.name));
 }
-function avatar(m){ const c=m.card||{}; return `<div class="av">${c.photo?`<img src="${c.photo}">`:(c.emoji||'⚽')}</div>`; }
+function avatar(m){ const c=m.card||{}, ph=safePhoto(c.photo); return `<div class="av">${ph?`<img src="${ph}" alt="">`:safeEmoji(c.emoji)}</div>`; }
 const scoreOf = m => [m.A.reduce((t,p)=>t+(+p.g||0),0), m.B.reduce((t,p)=>t+(+p.g||0),0)];
 const vClass = v => v>=7?'hi':v>=6?'mid':'lo';
 const fmtV = v => String(+(+v).toFixed(1));
@@ -441,28 +495,28 @@ function reportBlock(m){
 function viewLeague(){
   const l = S.league, admin = isAdmin(l);
   let h = `<div class="row sp" style="margin-bottom:6px"><button class="btn sec sm" style="flex:0" onclick="closeLeague()">‹ Indietro</button>
-    <button class="btn sec sm" style="flex:0" onclick="shareCode()">Codice: <b>${l.code}</b> 📋</button>${admin?`<button class="btn sec sm" style="flex:0" onclick="openModal('leagueSettings')">⚙️</button>`:''}</div>
+    <button class="btn sec sm" style="flex:0" onclick="shareCode()">Codice: <b>${esc(l.code)}</b> 📋</button>${admin?`<button class="btn sec sm" style="flex:0" onclick="openModal('leagueSettings')">⚙️</button>`:''}</div>
     <h1>${esc(l.name)}${admin?'<span class="badge">ADMIN</span>':''}</h1>
     <div class="seg"><button class="${S.ltab==='board'?'on':''}" onclick="ltab('board')">Bacheca</button><button class="${S.ltab==='rank'?'on':''}" onclick="ltab('rank')">Classifica</button><button class="${S.ltab==='matches'?'on':''}" onclick="ltab('matches')">Storico</button><button class="${S.ltab==='players'?'on':''}" onclick="ltab('players')">Giocatori</button></div>`;
   if(S.ltab==='board'){
     const ms = lm().matches, withR = ms.filter(m=>m.report), without = ms.filter(m=>!m.report);
     const nx = (lm().fixtures||[]).filter(isUpcoming).sort((a,b)=>(a.date+a.time).localeCompare(b.date+b.time))[0];
     if(nx) h += `<div class="box"><div class="tl">📅 Prossima partita · ${relDay(nx)}</div><b class="fxd" style="display:block;font-size:15px;margin:4px 0 0">${new Date(nx.date+'T12:00').toLocaleDateString('it-IT',{weekday:'long',day:'numeric',month:'long'})}</b><div class="mut">🕐 ${esc(nx.time)}${nx.place?` · 📍 ${esc(nx.place)}`:''}</div></div>`;
-    h += withR.map(m=>`<div class="box match">${matchHead(m)}${reportBlock(m)}${admin?`<div class="row" style="margin-top:10px"><button class="btn sec sm" onclick="openReport('${m.id}')">✏️ Modifica resoconto</button><button class="btn danger sm" onclick="delReport('${m.id}')">🗑 Elimina</button></div>`:''}</div>`).join('');
+    h += withR.map(m=>`<div class="box match">${matchHead(m)}${reportBlock(m)}${admin?`<div class="row" style="margin-top:10px"><button class="btn sec sm" onclick="openReport(${q(m.id)})">✏️ Modifica resoconto</button><button class="btn danger sm" onclick="delReport(${q(m.id)})">🗑 Elimina</button></div>`:''}</div>`).join('');
     if(!withR.length) h += "<p class='mut'>La bacheca è vuota: dopo ogni calcetto l'admin pubblica qui il resoconto ufficiale con voti e commenti.</p>";
     if(admin && without.length) h += '<h2>Resoconti da scrivere</h2>' + without.map(m=>{ const [a,b]=scoreOf(m);
-      return `<div class="pl"><div class="nm"><b>${new Date(m.date+'T12:00').toLocaleDateString('it-IT',{day:'numeric',month:'short',year:'numeric'})} · ${a}-${b}</b><span class="mut">${esc(m.place||'—')}</span></div><button class="btn sm" onclick="openReport('${m.id}')">Scrivi</button></div>`; }).join('');
+      return `<div class="pl"><div class="nm"><b>${new Date(m.date+'T12:00').toLocaleDateString('it-IT',{day:'numeric',month:'short',year:'numeric'})} · ${a}-${b}</b><span class="mut">${esc(m.place||'—')}</span></div><button class="btn sm" onclick="openReport(${q(m.id)})">Scrivi</button></div>`; }).join('');
   } else if(S.ltab==='rank'){
-    h += ranking().map(({m,s},i)=>`<div class="pl" onclick="showPlayer('${m.id}')"><div class="rk">${i+1}</div>${avatar(m)}<div class="nm"><b>${esc(dispName(m))}</b><span class="mut">${s.played}P · ${s.winPct}% V · ${s.goals}G · ${s.assists}A${s.avg==null?'':' · ⭐'+f1(s.avg)}${s.mvp?' · 🏅'+s.mvp:''}</span></div><div class="ov">${s.ovr}</div></div>`).join('') || '<p class="mut">Nessun giocatore.</p>';
+    h += ranking().map(({m,s},i)=>`<div class="pl" onclick="showPlayer(${q(m.id)})"><div class="rk">${i+1}</div>${avatar(m)}<div class="nm"><b>${esc(dispName(m))}</b><span class="mut">${s.played}P · ${s.winPct}% V · ${s.goals}G · ${s.assists}A${s.avg==null?'':' · ⭐'+f1(s.avg)}${s.mvp?' · 🏅'+s.mvp:''}</span></div><div class="ov">${s.ovr}</div></div>`).join('') || '<p class="mut">Nessun giocatore.</p>';
   } else if(S.ltab==='matches'){
     const {matches,members} = lm(); const nm = id => { const m=members.find(x=>x.id===id); return m?dispName(m):'?'; };
-    const tl = t => t.map(p=>`<div>${esc(nm(p.id))}${p.g?` ⚽${p.g}`:''}${p.a?` 🎯${p.a}`:''}</div>`).join('');
+    const tl = t => t.map(p=>`<div>${esc(nm(p.id))}${num(p.g)?` ⚽${num(p.g)}`:''}${num(p.a)?` 🎯${num(p.a)}`:''}</div>`).join('');
     h += matches.map(m=>`<div class="box match">${matchHead(m)}<div class="teams"><div><div class="tl">Squadra A</div>${tl(m.A)}</div><div><div class="tl" style="color:#f97316">Squadra B</div>${tl(m.B)}</div></div>
       ${reportBlock(m)}
-      ${admin?`<div class="row" style="margin-top:10px"><button class="btn sec sm" onclick="editMatch('${m.id}')">✏️ Partita</button><button class="btn sec sm" onclick="openReport('${m.id}')">📋 Resoconto</button><button class="btn danger sm" onclick="delMatch('${m.id}')">🗑</button></div>`:''}</div>`).join('') || '<p class="mut">Nessuna partita registrata'+(admin?': premi “+ Partita”.':'.')+'</p>';
+      ${admin?`<div class="row" style="margin-top:10px"><button class="btn sec sm" onclick="editMatch(${q(m.id)})">✏️ Partita</button><button class="btn sec sm" onclick="openReport(${q(m.id)})">📋 Resoconto</button><button class="btn danger sm" onclick="delMatch(${q(m.id)})">🗑</button></div>`:''}</div>`).join('') || '<p class="mut">Nessuna partita registrata'+(admin?': premi “+ Partita”.':'.')+'</p>';
   } else {
     const st = leagueStats(l.id);
-    h += lm().members.filter(m=>!m.removed).map(m=>`<div class="pl" onclick="showPlayer('${m.id}')">${avatar(m)}<div class="nm"><b>${esc(m.name)}${m.uid&&l.admins.includes(m.uid)?'<span class="badge">ADMIN</span>':''}</b><span class="mut">${m.uid?'Registrato con Google':'Senza account'}</span></div><div class="ov">${st[m.id].ovr}</div></div>`).join('');
+    h += lm().members.filter(m=>!m.removed).map(m=>`<div class="pl" onclick="showPlayer(${q(m.id)})">${avatar(m)}<div class="nm"><b>${esc(m.name)}${m.uid&&l.admins.includes(m.uid)?'<span class="badge">ADMIN</span>':''}</b><span class="mut">${m.uid?'Registrato con Google':'Senza account'}</span></div><div class="ov">${st[m.id].ovr}</div></div>`).join('');
     if(admin) h += `<br><button class="btn sec" onclick="openModal('guest')">+ Aggiungi giocatore senza account</button>`;
   }
   return h;
@@ -480,6 +534,8 @@ function viewModal(){
   if(m.type==='editPlayer') b = playerEditor();
   if(m.type==='match') b = matchForm();
   if(m.type==='leagueSettings') b = `<h2>Impostazioni lega</h2><label>Nome della lega</label><input id="f1" value="${esc(S.league.name)}" maxlength="40"><button class="btn" onclick="renameLeague()">Salva nome</button>
+    <h2>Codice invito</h2><p class="mut">Codice attuale: <b>${esc(S.league.code)}</b>. Se è finito in mani sbagliate, o dopo aver rimosso qualcuno che non deve rientrare, generane uno nuovo.</p>
+    <button class="btn sec" onclick="newCode()">🔄 Genera nuovo codice</button>
     ${coAdminList()}<h2 style="color:var(--red)">Zona pericolosa</h2><p class="mut">Eliminando la lega cancelli per sempre partite, resoconti, voti e statistiche di tutti i giocatori. Non si può annullare.</p>
     <button class="btn danger" onclick="goModal('delLeague')">🗑 Elimina lega definitivamente</button>`;
   if(m.type==='delLeague') b = `<h2 style="color:var(--red)">Eliminare “${esc(S.league.name)}”?</h2><p class="mut">Sparirà per tutti i giocatori (${lm().members.filter(m=>!m.removed).length}), con ${lm().matches.length} ${lm().matches.length===1?'partita':'partite'} e tutti i resoconti. Per confermare scrivi il nome esatto della lega.</p>
@@ -495,13 +551,13 @@ function viewModal(){
   if(m.type==='claimAsk'){ const l = S.leagues.find(x=>x.id===m.lid);
     b = `<h2>Vuoi selezionare un giocatore già esistente?</h2>
       <p class="mut">Nella lega “${esc(l.name)}” l'admin potrebbe aver già registrato le tue partite. Se uno di quei giocatori sei tu, collegalo al tuo account: ti porti dietro statistiche e overall.</p>
-      <button class="btn" onclick="goModal('claimPick','${m.lid}')">Sì, selezionalo</button>
-      <button class="btn sec" onclick="createSelf('${m.lid}')">No, crea un nuovo giocatore da zero</button>`; }
+      <button class="btn" onclick="goModal('claimPick',${q(m.lid)})">Sì, selezionalo</button>
+      <button class="btn sec" onclick="createSelf(${q(m.lid)})">No, crea un nuovo giocatore da zero</button>`; }
   if(m.type==='claimPick'){ const ms = S.cache[m.lid].members.filter(x=>!x.uid&&(!x.removed||x.formerUid===S.user.uid)), st = leagueStats(m.lid);
     b = `<h2>Chi sei?</h2><p class="mut">Scegli il giocatore che sei tu.</p>
-      ${ms.map(x=>`<div class="pl" onclick="claim('${m.lid}','${x.id}')">${avatar(x)}<div class="nm"><b>${esc(x.name)}</b><span class="mut">${st[x.id].played} partite · ${st[x.id].goals} gol · ${st[x.id].assists} assist</span></div><div class="ov">${st[x.id].ovr}</div></div>`).join('')||'<p class="mut">Non ci sono giocatori disponibili da collegare.</p>'}
-      <br><button class="btn sec" onclick="createSelf('${m.lid}')">Nessuno di questi: crea un nuovo giocatore</button>
-      <button class="btn sec" onclick="goModal('claimAsk','${m.lid}')">‹ Indietro</button>`; }
+      ${ms.map(x=>`<div class="pl" onclick="claim(${q(m.lid)},${q(x.id)})">${avatar(x)}<div class="nm"><b>${esc(x.name)}</b><span class="mut">${st[x.id].played} partite · ${st[x.id].goals} gol · ${st[x.id].assists} assist</span></div><div class="ov">${st[x.id].ovr}</div></div>`).join('')||'<p class="mut">Non ci sono giocatori disponibili da collegare.</p>'}
+      <br><button class="btn sec" onclick="createSelf(${q(m.lid)})">Nessuno di questi: crea un nuovo giocatore</button>
+      <button class="btn sec" onclick="goModal('claimAsk',${q(m.lid)})">‹ Indietro</button>`; }
   const close = (m.type==='claimAsk'||m.type==='claimPick'||m.type==='privacy') ? '' : (m.type==='cal'&&m.prev) ? '<br><button class="btn sec" onclick="calBack()">‹ Indietro</button>' : '<br><button class="btn sec" onclick="closeModal()">Chiudi</button>';
   return `<div class="modal" onclick="if(event.target===this)closeModal()"><div>${b}${close}</div></div>`;
 }
@@ -519,7 +575,7 @@ window.ltab = t => { S.ltab=t; render(); };
 function playerView(){
   const mem = lm().members.find(x=>x.id===S.modal.id), st = leagueStats(S.league.id)[mem.id], admin = isAdmin(S.league);
   return `<h2>${esc(mem.name)}${mem.uid?'':'<span class="badge g">SENZA ACCOUNT</span>'}</h2>${cardHTML(mem,st)}${statGrid(st,mem.id)}
-   ${admin?`<br><button class="btn" onclick="editPlayer('${mem.id}')">✏️ Modifica giocatore, statistiche e overall</button>`:''}`;
+   ${admin?`<br><button class="btn" onclick="editPlayer(${q(mem.id)})">✏️ Modifica giocatore, statistiche e overall</button>`:''}`;
 }
 
 /* ---------- Collegamento giocatore ↔ account ---------- */
@@ -548,8 +604,8 @@ function cardEditor(){
    <label>Soprannome</label><input value="${esc(d.nick)}" maxlength="12" oninput="cd('nick',this.value)">
    <div class="row"><div><label>Ruolo</label><select onchange="cd('pos',this.value,1)">${POS.map(p=>`<option ${p===d.pos?'selected':''}>${p}</option>`).join('')}</select></div>
    <div><label>Numero</label><input type="number" min="1" max="99" value="${esc(d.num)}" oninput="cd('num',this.value)"></div></div>
-   <label>Colore carta</label><div class="chips">${Object.entries(THEMES).map(([k,t])=>`<div class="sw ${d.theme===k?'on':''}" style="background:${t.bg}" onclick="cd('theme','${k}',1)"></div>`).join('')}</div>
-   <label>Icona</label><div class="chips">${EMOJIS.map(e=>`<div class="chip ${!d.photo&&d.emoji===e?'on':''}" onclick="cd('emoji','${e}',1)">${e}</div>`).join('')}</div>
+   <label>Colore carta</label><div class="chips">${Object.entries(THEMES).map(([k,t])=>`<div class="sw ${d.theme===k?'on':''}" style="background:${t.bg}" onclick="cd('theme',${q(k)},1)"></div>`).join('')}</div>
+   <label>Icona</label><div class="chips">${EMOJIS.map(e=>`<div class="chip ${!d.photo&&d.emoji===e?'on':''}" onclick="cd('emoji',${q(e)},1)">${e}</div>`).join('')}</div>
    <label>Oppure una tua foto</label><input type="file" accept="image/*" onchange="pickPhoto(this)">
    ${d.photo?'<button class="btn sec sm" onclick="cd(\'photo\',\'\',1)">Rimuovi foto</button><br><br>':''}
    <button class="btn" onclick="saveCard()">Salva carta</button>`;
@@ -565,28 +621,41 @@ window.pickPhoto = inp => {
   r.readAsDataURL(f);
 };
 window.saveCard = async () => {
-  const card = {...S.draft, nick:(S.draft.nick||'').trim()||S.me.name.split(' ')[0], num:Math.max(1,Math.min(99,+S.draft.num||10))};
-  S.me.card = card; await DB.setUser(S.user.uid,{card});
-  for(const l of S.leagues){ const m = myMember(l.id); if(m){ m.card=card; await DB.patchMember(l.id,m.id,{card}); } }
-  S.modal=null; S.draft=null; toast('Carta aggiornata ✅'); render();
+  const card = {...S.draft, nick:((S.draft.nick||'').trim()||S.me.name.split(' ')[0]).slice(0,12), num:Math.max(1,Math.min(99,+S.draft.num||10)), photo:safePhoto(S.draft.photo), emoji:safeEmoji(S.draft.emoji)};
+  try{ await DB.setUser(S.user.uid,{card}); }catch(e){ console.error(e); return toast('Salvataggio non riuscito, riprova'); }
+  S.me.card = card;
+  /* copia la carta in tutte le leghe; se qualcuna fallisce lo diciamo invece di tacere */
+  const mine = S.leagues.map(l=>[l,myMember(l.id)]).filter(([,m])=>m);
+  const res = await Promise.allSettled(mine.map(([l,m])=>DB.patchMember(l.id,m.id,{card}).then(()=>{ m.card=card; })));
+  const ko = res.filter(r=>r.status==='rejected'); ko.forEach(r=>console.error(r.reason));
+  S.modal=null; S.draft=null; toast(ko.length?`Carta salvata, ma non aggiornata in ${ko.length} ${ko.length===1?'lega':'leghe'}`:'Carta aggiornata ✅'); render();
 };
 
 /* Leghe */
 window.createLeague = async () => {
   const name = $('#f1').value.trim(); if(!name) return;
-  const l = {id:uid()+uid(), name, code:mkCode(), admins:[S.user.uid], memberIds:[S.user.uid], created:Date.now()};
-  await DB.saveLeague(l);
-  await DB.setMember(l.id,{id:S.user.uid,uid:S.user.uid,name:S.me.name,guest:false,card:S.me.card});
+  try{
+    const l = {id:uid()+uid(), name:name.slice(0,40), code:await freeCode(), admins:[S.user.uid], memberIds:[S.user.uid], created:Date.now()};
+    await DB.saveLeague(l);
+    await DB.setMember(l.id,{id:S.user.uid,uid:S.user.uid,name:S.me.name,guest:false,card:S.me.card});
+    codeChecked.add(l.id);
+    if(!(await DB.ensureCode(l))){ const c = await freeCode(); await DB.setCode(l.id,c); }
+  }catch(e){ console.error(e); return toast('Creazione non riuscita, riprova'); }
   S.modal=null; await loadHome(); toast('Lega creata 🎉'); S.tab='lg'; render();
 };
 window.joinLeague = async () => {
-  const code = $('#f1').value.trim().toUpperCase(); if(!code) return;
-  const l = await DB.findByCode(code); if(!l) return toast('Codice non valido');
-  if(l.memberIds.includes(S.user.uid)){
-    await loadLeague(l.id);
-    if(myMember(l.id)) return toast('Sei già in questa lega');
-  } else { l.memberIds.push(S.user.uid); await DB.saveLeague(l); }
+  const code = $('#f1').value.trim().toUpperCase().replace(/[^A-Z0-9]/g,''); if(!code) return;
+  if(S.leagues.some(l=>l.code===code && myMember(l.id))) return toast('Sei già in questa lega');
+  let l;
+  try{ l = await DB.joinByCode(code,S.user.uid); }catch(e){ console.error(e); return toast('Ingresso non riuscito, riprova'); }
+  if(!l) return toast('Codice non valido');
   S.modal=null; S.tab='lg'; await loadHome(); render();   /* se non hai ancora un giocatore parte la domanda */
+};
+window.newCode = async () => {
+  if(!confirm('Generare un nuovo codice invito? Quello vecchio smetterà di funzionare (chi è già nella lega resta dentro).')) return;
+  const l = S.league;
+  try{ const c = await freeCode(); await DB.setCode(l.id,c,l.code); }catch(e){ console.error(e); return toast('Operazione non riuscita'); }
+  await refresh(l.id); S.modal={type:'leagueSettings'}; toast('Nuovo codice: '+S.league.code); render();
 };
 window.renameLeague = async () => {
   const name = ($('#f1').value||'').trim(); if(!name) return toast('Inserisci un nome');
@@ -621,7 +690,7 @@ window.editPlayer = id => {
 function playerEditor(){
   const d = S.draft, l = S.league, mem = lm().members.find(x=>x.id===S.modal.id);
   const used = lm().matches.some(m=>[...m.A,...m.B].some(p=>p.id===mem.id));
-  const nf = (k,lab) => `<div><label>${lab}</label><input type="number" inputmode="numeric" min="0" value="${esc(d[k])}" oninput="ed('${k}',this.value)"></div>`;
+  const nf = (k,lab) => `<div><label>${lab}</label><input type="number" inputmode="numeric" min="0" value="${esc(d[k])}" oninput="ed(${q(k)},this.value)"></div>`;
   const tot = ['wins','draws','losses'].reduce((t,k)=>t+(parseInt(d[k])||0),0);
   return `<h2>Modifica ${esc(mem.name)}</h2>
    <div class="demo">Da admin puoi cambiare tutto. I numeri qui sotto sono i <b>totali finali</b>: le partite future si sommeranno a questi.</div>
@@ -633,12 +702,12 @@ function playerEditor(){
    <div class="row">${nf('wins','Vittorie')}${nf('draws','Pareggi')}${nf('losses','Sconfitte')}</div>
    <div class="row">${nf('goals','Gol')}${nf('assists','Assist')}<div><label>Overall (64-99)</label><input type="number" inputmode="numeric" min="64" max="99" value="${esc(d.ovr)}" oninput="ed('ovr',this.value);S.draft.ovrTouched=true"></div></div>
    <p class="mut">Partite totali: <b>${tot}</b> (vittorie + pareggi + sconfitte). Se non tocchi l'overall, si ricalcola da solo con le statistiche; se lo cambi, resta la tua correzione e continua ad aggiornarsi con le prossime partite.</p>
-   <label>Colore carta</label><div class="chips">${Object.entries(THEMES).map(([k,t])=>`<div class="sw ${d.theme===k?'on':''}" style="background:${t.bg}" onclick="ed('theme','${k}',1)"></div>`).join('')}</div>
-   <label>Icona</label><div class="chips">${EMOJIS.map(e=>`<div class="chip ${!d.photo&&d.emoji===e?'on':''}" onclick="ed('emoji','${e}',1)">${e}</div>`).join('')}</div>
+   <label>Colore carta</label><div class="chips">${Object.entries(THEMES).map(([k,t])=>`<div class="sw ${d.theme===k?'on':''}" style="background:${t.bg}" onclick="ed('theme',${q(k)},1)"></div>`).join('')}</div>
+   <label>Icona</label><div class="chips">${EMOJIS.map(e=>`<div class="chip ${!d.photo&&d.emoji===e?'on':''}" onclick="ed('emoji',${q(e)},1)">${e}</div>`).join('')}</div>
    <button class="btn" onclick="savePlayer()">Salva modifiche</button>
    <button class="btn sec" onclick="resetPlayer()">↺ Ripristina calcolo automatico</button>
-   ${mem.uid&&!l.admins.includes(mem.uid)?`<button class="btn sec" onclick="makeAdmin('${mem.uid}')">👑 Nomina co-admin</button>`:''}
-   ${mem.uid!==S.user.uid?`<button class="btn danger" onclick="removePlayer('${mem.id}')">🚫 Rimuovi dalla lega</button>
+   ${mem.uid&&!l.admins.includes(mem.uid)?`<button class="btn sec" onclick="makeAdmin(${q(mem.uid)})">👑 Nomina co-admin</button>`:''}
+   ${mem.uid!==S.user.uid?`<button class="btn danger" onclick="removePlayer(${q(mem.id)})">🚫 Rimuovi dalla lega</button>
    <p class="mut">${used?'Sparisce da classifica e giocatori; le partite già giocate restano nello storico con il suo nome.':'Viene eliminato dalla lega.'}${mem.uid?' Perde anche l\'accesso alla lega.':''}</p>`:''}`;
 }
 window.ed = (k,v,re) => { S.draft[k]=v; if(k==='emoji') S.draft.photo=''; if(re) keepScroll(); };
@@ -649,7 +718,7 @@ window.savePlayer = async () => {
   const s = {wins:n('wins'),draws:n('draws'),losses:n('losses'),goals:n('goals'),assists:n('assists')}; s.played = s.wins+s.draws+s.losses;
   let ovrAdj = mem.ovrAdj||0;
   if(d.ovrTouched) ovrAdj = clampOv(parseInt(d.ovr)||OV_MIN) - calcOverall(s);
-  const card = {...mem.card, nick:(d.nick||'').trim()||(d.name||mem.name).split(' ')[0], pos:d.pos, num:Math.max(1,Math.min(99,parseInt(d.num)||10)), theme:d.theme, emoji:d.emoji, photo:d.photo||''};
+  const card = {...mem.card, nick:((d.nick||'').trim()||(d.name||mem.name).split(' ')[0]).slice(0,12), pos:d.pos, num:Math.max(1,Math.min(99,parseInt(d.num)||10)), theme:d.theme, emoji:safeEmoji(d.emoji), photo:safePhoto(d.photo)};
   try{ await DB.patchMember(lid,mem.id,{name:(d.name||'').trim()||mem.name,card,adj,ovrAdj}); }
   catch(e){ console.error(e); return toast('Salvataggio non riuscito'); }
   S.modal=null; S.draft=null; await refresh(lid); toast('Giocatore aggiornato ✅'); render();
@@ -668,7 +737,7 @@ window.removePlayer = async id => {
     if(mem.uid){
       const fresh = await DB.getLeague(lid); if(!fresh) return toast('Lega non trovata');
       const admins = fresh.admins.filter(x=>x!==mem.uid); if(!admins.length) return toast('Deve esserci almeno un admin');
-      await DB.patchLeague(lid,{memberIds:fresh.memberIds.filter(x=>x!==mem.uid),admins});
+      await DB.kick(lid,mem.uid);   /* arrayRemove: non sovrascrive chi entra nello stesso momento */
     }
     if(used) await DB.patchMember(lid,id,{removed:true,uid:null,guest:true,formerUid:mem.uid||null});
     else await DB.delMember(lid,id);
@@ -681,14 +750,12 @@ function coAdminList(){
    <p class="mut">I co-admin hanno gli stessi poteri dell'admin: partite, resoconti, modifica dei giocatori, nome e cancellazione della lega. Possono esserlo solo i giocatori con account Google.</p>
    ${regs.map(x=>{ const a = l.admins.includes(x.uid);
      return `<div class="pl">${avatar(x)}<div class="nm"><b>${esc(x.name)}${x.uid===S.user.uid?' (tu)':''}</b><span class="mut">${a?'Admin':'Giocatore'}</span></div>
-       <button class="btn sm ${a?'danger':''}" onclick="${a?'removeAdmin':'makeAdmin'}('${x.uid}')">${a?'Rimuovi':'Nomina co-admin'}</button></div>`; }).join('')}`;
+       <button class="btn sm ${a?'danger':''}" onclick="${a?'removeAdmin':'makeAdmin'}(${q(x.uid)})">${a?'Rimuovi':'Nomina co-admin'}</button></div>`; }).join('')}`;
 }
 window.makeAdmin = async u => {
   if(!confirm("Nominare co-admin questo giocatore? Avrà gli stessi poteri dell'admin, compresa la cancellazione della lega.")) return;
   const l = S.league, back = S.modal && S.modal.type==='leagueSettings';
-  const fresh = await DB.getLeague(l.id); if(!fresh) return toast('Lega non trovata');
-  const admins = fresh.admins.includes(u) ? fresh.admins : [...fresh.admins,u];
-  try{ await DB.patchLeague(l.id,{admins}); }catch(e){ console.error(e); return toast('Operazione non riuscita'); }
+  try{ await DB.addAdmin(l.id,u); }catch(e){ console.error(e); return toast('Operazione non riuscita'); }
   S.draft=null; S.modal = back?{type:'leagueSettings'}:null; await refresh(l.id); toast('Nuovo co-admin 👑'); render();
 };
 window.removeAdmin = async u => {
@@ -696,7 +763,7 @@ window.removeAdmin = async u => {
   if(fresh.admins.length<=1) return toast('Deve esserci almeno un admin');
   const self = u===S.user.uid;
   if(!confirm(self?'Rimuovere i tuoi poteri di admin? Non potrai più modificare la lega.':'Togliere i poteri di admin a questo giocatore?')) return;
-  try{ await DB.patchLeague(l.id,{admins:fresh.admins.filter(x=>x!==u)}); }catch(e){ console.error(e); return toast('Operazione non riuscita'); }
+  try{ await DB.removeAdmin(l.id,u); }catch(e){ console.error(e); return toast('Operazione non riuscita'); }
   S.modal = self?null:{type:'leagueSettings'}; await refresh(l.id); toast(self?'Non sei più admin':'Poteri rimossi'); render();
 };
 
@@ -705,7 +772,7 @@ const todayStr = () => { const d=new Date(); return `${d.getFullYear()}-${String
 window.newMatch = pre => { pre = (pre && pre.date) ? pre : {}; S.draft={id:uid()+uid(),date:pre.date||todayStr(),time:pre.time||'21:00',place:pre.place||'',rows:{},fx:pre.fx||null}; S.modal={type:'match'}; render(); };
 window.editMatch = id => {
   const m = lm().matches.find(x=>x.id===id), rows = {};
-  m.A.forEach(p=>rows[p.id]={t:'A',g:p.g||0,a:p.a||0}); m.B.forEach(p=>rows[p.id]={t:'B',g:p.g||0,a:p.a||0});
+  m.A.forEach(p=>rows[p.id]={t:'A',g:num(p.g),a:num(p.a)}); m.B.forEach(p=>rows[p.id]={t:'B',g:num(p.g),a:num(p.a)});
   S.draft={id:m.id,date:m.date,time:m.time,place:m.place,rows}; S.modal={type:'match'}; render();
 };
 window.delMatch = async id => {
@@ -717,15 +784,15 @@ function matchForm(){
   const sc = t => Object.values(d.rows).filter(r=>r.t===t).reduce((s,r)=>s+r.g,0);
   const cnt = t => Object.values(d.rows).filter(r=>r.t===t).length;
   return `<h2>${lm().matches.some(x=>x.id===d.id)?'Modifica partita':'Nuova partita'}</h2>
-   <div class="row"><div><label>Giorno</label><input type="date" value="${d.date}" oninput="S.draft.date=this.value"></div><div><label>Ora</label><input type="time" value="${d.time}" oninput="S.draft.time=this.value"></div></div>
+   <div class="row"><div><label>Giorno</label><input type="date" value="${esc(d.date)}" oninput="S.draft.date=this.value"></div><div><label>Ora</label><input type="time" value="${esc(d.time)}" oninput="S.draft.time=this.value"></div></div>
    <label>Luogo</label><input value="${esc(d.place)}" placeholder="Campo / centro sportivo" oninput="S.draft.place=this.value">
    <div class="box" style="text-align:center"><span class="mut">A (${cnt('A')})</span> <b style="font-size:26px">${sc('A')} - ${sc('B')}</b> <span class="mut">(${cnt('B')}) B</span><div class="mut">Il risultato è la somma dei gol inseriti</div></div>
    <label>Formazioni e statistiche</label>
    ${mem.map(m=>{ const r=d.rows[m.id]||{t:'',g:0,a:0};
      return `<div class="pick"><b style="font-size:14px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(m.name)}${m.uid?'':' <span class="mut">(no account)</span>'}</b>
-     <div class="tg"><button class="${r.t==='A'?'on a':''}" onclick="setT('${m.id}','A')">A</button><button class="${r.t==='B'?'on b':''}" onclick="setT('${m.id}','B')">B</button></div>
-     ${r.t?`<div class="st">⚽<button onclick="stp('${m.id}','g',-1)">−</button><span>${r.g}</span><button onclick="stp('${m.id}','g',1)">+</button></div>
-     <div class="st">🎯<button onclick="stp('${m.id}','a',-1)">−</button><span>${r.a}</span><button onclick="stp('${m.id}','a',1)">+</button></div>`:'<span></span><span></span>'}</div>`}).join('')}
+     <div class="tg"><button class="${r.t==='A'?'on a':''}" onclick="setT(${q(m.id)},'A')">A</button><button class="${r.t==='B'?'on b':''}" onclick="setT(${q(m.id)},'B')">B</button></div>
+     ${r.t?`<div class="st">⚽<button onclick="stp(${q(m.id)},'g',-1)">−</button><span>${r.g}</span><button onclick="stp(${q(m.id)},'g',1)">+</button></div>
+     <div class="st">🎯<button onclick="stp(${q(m.id)},'a',-1)">−</button><span>${r.a}</span><button onclick="stp(${q(m.id)},'a',1)">+</button></div>`:'<span></span><span></span>'}</div>`}).join('')}
    <br><button class="btn sec" onclick="quickGuest()">+ Nuovo giocatore senza account</button>
    <button class="btn" onclick="saveMatch()">Salva partita</button>`;
 }
@@ -761,8 +828,8 @@ window.openReport = mid => {
 function reportForm(){
   const m = lm().matches.find(x=>x.id===S.modal.mid), d = S.draft, mem = lm().members, [a,b] = scoreOf(m);
   const row = p => { const x = mem.find(y=>y.id===p.id); if(!x) return ''; const r = d.ratings[p.id];
-    return `<div class="rp"><div class="top"><b>${esc(x.name)}</b><div class="stv"><button onclick="rv('${p.id}',-1)">−</button><span>${r.v==null?'–':fmtV(r.v)}</span><button onclick="rv('${p.id}',1)">+</button></div></div>
-      <input placeholder="Commento su ${esc(dispName(x))}…" value="${esc(r.c)}" oninput="S.draft.ratings['${p.id}'].c=this.value"></div>`; };
+    return `<div class="rp"><div class="top"><b>${esc(x.name)}</b><div class="stv"><button onclick="rv(${q(p.id)},-1)">−</button><span>${r.v==null?'–':fmtV(r.v)}</span><button onclick="rv(${q(p.id)},1)">+</button></div></div>
+      <input placeholder="Commento su ${esc(dispName(x))}…" value="${esc(r.c)}" oninput="S.draft.ratings[${q(p.id)}].c=this.value"></div>`; };
   return `<h2>${m.report?'Modifica resoconto':'Resoconto della partita'}</h2>
    <p class="mut">${new Date(m.date+'T12:00').toLocaleDateString('it-IT',{day:'numeric',month:'long',year:'numeric'})} · ${a} - ${b}</p>
    <label>Com'è andata</label><textarea placeholder="Racconta la partita…" oninput="S.draft.text=this.value">${esc(d.text)}</textarea>
@@ -820,7 +887,7 @@ function calView(){
     const key = `${y}-${String(mo+1).padStart(2,'0')}-${String(d).padStart(2,'0')}`, es = byDay[key];
     let inner = `<span class="dn">${d}</span>`;
     if(es){ const a = avgOf(es.filter(e=>e.v!=null).map(e=>e.v)); inner += a==null ? '<span class="cv v-no">–</span>' : `<span class="cv v-${vClass(a)}">${fmtV(a)}</span>`; if(es.some(e=>e.mvp)) inner += '<span class="mv">🏅</span>'; }
-    cells += `<div class="cd${es?' has':''}${m.sel===key?' sel':''}"${es?` onclick="calSel('${key}')"`:''}>${inner}</div>`;
+    cells += `<div class="cd${es?' has':''}${m.sel===key?' sel':''}"${es?` onclick="calSel(${q(key)})"`:''}>${inner}</div>`;
   }
   const det = (byDay[m.sel]||[]).map(e=>`<div class="box"><b>${e.v==null?'Nessun voto':'Voto '+fmtV(e.v)}</b>${e.mvp?' · 🏅 MVP':''} · ${e.res} ${e.score}<div class="mut">${esc(e.lg)}${e.place?' · '+esc(e.place):''} · Squadra ${e.team}</div>${e.c?`<div style="margin-top:6px">“${esc(e.c)}”</div>`:''}</div>`).join('');
   return `<h2>${esc(m.title)}</h2>
@@ -842,9 +909,9 @@ function allFixtures(){
 }
 function fxCard(f){
   const d = new Date(f.date+'T12:00').toLocaleDateString('it-IT',{weekday:'long',day:'numeric',month:'long',year:'numeric'});
-  return `<div class="box"><div class="row sp"><span class="badge" style="margin:0;cursor:pointer;flex:0;white-space:nowrap" onclick="enter('${f.lid}')">🏆 ${esc(f.lname)}</span><span class="mut" style="text-align:right">${relDay(f)}</span></div>
+  return `<div class="box"><div class="row sp"><span class="badge" style="margin:0;cursor:pointer;flex:0;white-space:nowrap" onclick="enter(${q(f.lid)})">🏆 ${esc(f.lname)}</span><span class="mut" style="text-align:right">${relDay(f)}</span></div>
    <div class="fxd">${d}</div><div class="mut">🕐 ${esc(f.time)}${f.place?` · 📍 ${esc(f.place)}`:''}</div>${f.note?`<p class="fxn">${esc(f.note)}</p>`:''}
-   ${f.admin?`<div class="row" style="margin-top:10px"><button class="btn sm" onclick="playFixture('${f.lid}','${f.id}')">✅ Inserisci formazioni</button><button class="btn sec sm" style="flex:0" onclick="editFixture('${f.lid}','${f.id}')">✏️</button><button class="btn danger sm" style="flex:0" onclick="delFixture('${f.lid}','${f.id}')">🗑</button></div>`:''}</div>`;
+   ${f.admin?`<div class="row" style="margin-top:10px"><button class="btn sm" onclick="playFixture(${q(f.lid)},${q(f.id)})">✅ Inserisci formazioni</button><button class="btn sec sm" style="flex:0" onclick="editFixture(${q(f.lid)},${q(f.id)})">✏️</button><button class="btn danger sm" style="flex:0" onclick="delFixture(${q(f.lid)},${q(f.id)})">🗑</button></div>`:''}</div>`;
 }
 function viewFixtures(){
   const all = allFixtures(), up = all.filter(isUpcoming), past = all.filter(f=>!isUpcoming(f)&&f.admin).reverse(), canCreate = S.leagues.some(isAdmin);
@@ -866,8 +933,8 @@ window.editFixture = (lid,id) => {
 function fixtureForm(){
   const d = S.draft, mine = S.leagues.filter(isAdmin);
   return `<h2>${S.modal.edit?'Modifica partita programmata':'Programma una partita'}</h2>
-   <label>Lega che organizza</label><select ${S.modal.edit?'disabled':''} onchange="S.draft.lid=this.value">${mine.map(l=>`<option value="${l.id}" ${l.id===d.lid?'selected':''}>${esc(l.name)}</option>`).join('')}</select>
-   <div class="row"><div><label>Giorno</label><input type="date" value="${d.date}" oninput="S.draft.date=this.value"></div><div><label>Ora</label><input type="time" value="${d.time}" oninput="S.draft.time=this.value"></div></div>
+   <label>Lega che organizza</label><select ${S.modal.edit?'disabled':''} onchange="S.draft.lid=this.value">${mine.map(l=>`<option value="${esc(l.id)}" ${l.id===d.lid?'selected':''}>${esc(l.name)}</option>`).join('')}</select>
+   <div class="row"><div><label>Giorno</label><input type="date" value="${esc(d.date)}" oninput="S.draft.date=this.value"></div><div><label>Ora</label><input type="time" value="${esc(d.time)}" oninput="S.draft.time=this.value"></div></div>
    <label>Luogo</label><input value="${esc(d.place)}" placeholder="Campo / centro sportivo" oninput="S.draft.place=this.value">
    <label>Note (facoltative)</label><input value="${esc(d.note)}" maxlength="140" placeholder="Es. portate le maglie chiare" oninput="S.draft.note=this.value">
    <button class="btn" onclick="saveFixture()">Salva</button>`;
@@ -902,6 +969,10 @@ window.exportData = () => {
   const a = document.createElement('a'); a.href = url; a.download = 'calcetto-club-miei-dati.json'; document.body.appendChild(a); a.click(); a.remove();
   setTimeout(()=>URL.revokeObjectURL(url),1500); toast('Dati scaricati ✅');
 };
+
+/* service worker: app installabile e apribile anche senza rete */
+if('serviceWorker' in navigator && (location.protocol==='https:' || location.hostname==='localhost'))
+  addEventListener('load', () => navigator.serviceWorker.register('sw.js').catch(e=>console.warn('SW', e)));
 
 boot();
 </script>

@@ -1,0 +1,107 @@
+rules_version = '2';
+// Regole Firestore di Calcetto Club.
+// Pubblicale con:  firebase deploy --only firestore:rules
+// (oppure copiale in Console Firebase → Firestore → Regole).
+service cloud.firestore {
+  match /databases/{db}/documents {
+
+    function signedIn() { return request.auth != null; }
+    function me() { return request.auth.uid; }
+    function league(l) { return get(/databases/$(db)/documents/leagues/$(l)).data; }
+    function isMember(l) { return signedIn() && me() in league(l).memberIds; }
+    function isAdmin(l)  { return signedIn() && me() in league(l).admins; }
+    function changed() { return request.resource.data.diff(resource.data).affectedKeys(); }
+
+    // La carta finisce sul telefono di tutti i membri della lega: niente campi strani.
+    function validCard(c) {
+      return c is map
+        && c.get('photo', '') is string && c.get('photo', '').size() < 150000
+        && (c.get('photo', '') == '' || c.get('photo', '').matches('data:image/(jpeg|png|webp);base64,[A-Za-z0-9+/=]+'))
+        && c.get('emoji', '') is string && c.get('emoji', '').size() <= 16
+        && c.get('nick', '') is string && c.get('nick', '').size() <= 24
+        && c.get('pos', '') is string && c.get('pos', '').size() <= 8
+        && c.get('theme', '') is string && c.get('theme', '').size() <= 16;
+    }
+    function cardOk(d) { return !('card' in d) || validCard(d.card); }
+    function nameOk(d) { return !('name' in d) || (d.name is string && d.name.size() <= 80); }
+
+    // Il giocatore appartiene a me (vale anche per i vecchi documenti senza campo uid).
+    function isOwn(d, m) {
+      return d.get('uid', null) == me()
+        || (!('uid' in d) && d.get('guest', false) == false && m == me());
+    }
+    // Giocatore senza account, che si può collegare al proprio profilo.
+    function unclaimed(d) {
+      return ('uid' in d && d.uid == null) || (!('uid' in d) && d.get('guest', false) == true);
+    }
+
+    // Profilo personale: lo legge e lo scrive solo il proprietario (contiene l'email).
+    match /users/{u} {
+      allow read, delete: if signedIn() && me() == u;
+      allow create, update: if signedIn() && me() == u && cardOk(request.resource.data);
+    }
+
+    // Codice invito → id lega. Si può leggere un codice solo conoscendolo (niente elenco).
+    match /codes/{code} {
+      allow get: if signedIn();
+      allow list: if false;
+      allow create: if isAdmin(request.resource.data.lid)
+        && league(request.resource.data.lid).code == code;
+      allow delete: if isAdmin(resource.data.lid);
+      allow update: if false;
+    }
+
+    match /leagues/{l} {
+      // Una lega la vedono solo i suoi membri.
+      allow read: if signedIn() && me() in resource.data.memberIds;
+
+      allow create: if signedIn()
+        && request.resource.data.admins == [me()]
+        && request.resource.data.memberIds == [me()]
+        && request.resource.data.code is string;
+
+      allow update: if (isAdmin(l) && request.resource.data.admins.size() > 0)
+        // Ingresso con codice: ci si può aggiungere solo da soli, e solo se nello stesso
+        // batch si scrive joins/{mio uid} con il codice giusto della lega.
+        || (signedIn()
+            && changed().hasOnly(['memberIds'])
+            && request.resource.data.memberIds.toSet().hasAll(resource.data.memberIds)
+            && request.resource.data.memberIds.toSet().difference(resource.data.memberIds.toSet()).hasOnly([me()])
+            && getAfter(/databases/$(db)/documents/leagues/$(l)/joins/$(me())).data.code == resource.data.code);
+
+      allow delete: if isAdmin(l);
+
+      // Prova dell'ingresso: contiene il codice usato. Senza il codice giusto non si scrive.
+      match /joins/{u} {
+        allow read: if signedIn() && (me() == u || isAdmin(l));
+        allow create, update: if signedIn() && me() == u
+          && request.resource.data.code == league(l).code;
+        allow delete: if isAdmin(l);
+      }
+
+      match /members/{m} {
+        allow read: if isMember(l);
+
+        allow create: if cardOk(request.resource.data) && nameOk(request.resource.data) && (
+          isAdmin(l)
+          // il proprio giocatore, con id = proprio uid
+          || (isMember(l) && m == me() && request.resource.data.uid == me()));
+
+        allow update: if cardOk(request.resource.data) && nameOk(request.resource.data) && (
+          isAdmin(l)
+          // aggiornare nome e carta del proprio giocatore
+          || (isMember(l) && isOwn(resource.data, m) && changed().hasOnly(['name', 'card']))
+          // collegare a sé un giocatore senza account (o il proprio vecchio giocatore rimosso)
+          || (isMember(l) && unclaimed(resource.data)
+              && (resource.data.get('removed', false) == false || resource.data.get('formerUid', null) == me())
+              && request.resource.data.uid == me()
+              && changed().hasOnly(['uid', 'guest', 'removed', 'name', 'card'])));
+
+        allow delete: if isAdmin(l);
+      }
+
+      match /matches/{x}  { allow read: if isMember(l); allow write: if isAdmin(l); }
+      match /fixtures/{x} { allow read: if isMember(l); allow write: if isAdmin(l); }
+    }
+  }
+}
