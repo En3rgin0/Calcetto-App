@@ -1,17 +1,20 @@
 {
+  "id": "./",
   "name": "Calcetto Club",
   "short_name": "Calcetto",
-  "description": "Il registro dei vostri calcetti: statistiche, carte e overall da 64 a 99.",
+  "description": "Il registro dei vostri calcetti: partite, presenze, resoconti con voti e MVP, classifiche, record e carte con overall da 64 a 99.",
   "start_url": "./",
   "scope": "./",
   "display": "standalone",
-  "orientation": "portrait",
+  "orientation": "any",
   "background_color": "#06110c",
   "theme_color": "#06110c",
   "lang": "it",
+  "dir": "ltr",
+  "categories": ["sports", "lifestyle"],
   "icons": [
-    {"src": "icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any"},
-    {"src": "icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any"},
-    {"src": "icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable"}
+    {"src": "assets/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any"},
+    {"src": "assets/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any"},
+    {"src": "assets/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable"}
   ]
 }

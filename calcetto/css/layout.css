@@ -1,0 +1,222 @@
+/* Calcetto Club · struttura: navigazione, pagine, login, profilo */
+
+/* ================= Shell: navigazione ================= */
+#app {
+  min-height: 100vh;
+  min-height: 100dvh
+}
+
+.shell {
+  min-height: 100vh;
+  min-height: 100dvh
+}
+
+.main {
+  padding: calc(env(safe-area-inset-top) + 12px) var(--gut) calc(var(--nav-h) + env(safe-area-inset-bottom) + 28px)
+}
+
+.page {
+  max-width: 640px;
+  margin: 0 auto
+}
+
+.page:not(.still) {
+  animation: pageIn .28s var(--ease)
+}
+
+@keyframes pageIn {
+  from {
+    opacity: 0;
+    transform: translateY(6px)
+  }
+
+  to {
+    opacity: 1;
+    transform: none
+  }
+}
+
+.nav {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 15;
+  height: calc(var(--nav-h) + env(safe-area-inset-bottom));
+  padding-bottom: env(safe-area-inset-bottom);
+  background: rgba(8, 20, 14, .86);
+  border-top: 1px solid var(--line);
+  display: flex;
+  justify-content: center
+}
+
+@supports (backdrop-filter:blur(1px)) {
+  .nav {
+    background: rgba(8, 20, 14, .72);
+    backdrop-filter: saturate(1.4) blur(16px);
+    -webkit-backdrop-filter: saturate(1.4) blur(16px)
+  }
+}
+
+.nav .brand,
+.nav .nav-foot {
+  display: none
+}
+
+.nav-items {
+  display: flex;
+  width: 100%;
+  max-width: 520px
+}
+
+.nav-items button {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  color: var(--mut);
+  font-size: 11px;
+  font-weight: 600;
+  position: relative;
+  transition: color .15s
+}
+
+.nav-items button .i {
+  width: 22px;
+  height: 22px;
+  transition: transform .2s var(--ease)
+}
+
+.nav-items button.on {
+  color: var(--acc)
+}
+
+.nav-items button.on .i {
+  transform: translateY(-1px)
+}
+
+.nav-items button.on::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  width: 28px;
+  height: 3px;
+  border-radius: 0 0 3px 3px;
+  background: var(--acc)
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-weight: 800;
+  font-size: 17px;
+  letter-spacing: -.01em
+}
+
+.brand img {
+  width: 36px;
+  height: 36px;
+  border-radius: 10px;
+  box-shadow: var(--sh-1)
+}
+
+/* ================= Login ================= */
+.login {
+  min-height: 100vh;
+  min-height: 100dvh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: calc(env(safe-area-inset-top) + 24px) var(--gut) calc(env(safe-area-inset-bottom) + 24px)
+}
+
+.login-card {
+  width: 100%;
+  max-width: 420px;
+  text-align: center;
+  animation: pageIn .4s var(--ease)
+}
+
+.login .logo img {
+  width: 88px;
+  height: 88px;
+  border-radius: 24px;
+  box-shadow: 0 14px 40px rgba(0, 0, 0, .5), 0 0 0 1px var(--line2)
+}
+
+.login h1 {
+  margin: 18px 0 8px;
+  font-size: 34px
+}
+
+.login .lead {
+  color: var(--mut);
+  margin: 0 0 22px;
+  font-size: 15px
+}
+
+.login .box {
+  text-align: left;
+  font-size: 13px
+}
+
+.login ul {
+  margin: 8px 0 0;
+  padding-left: 18px;
+  color: var(--mut)
+}
+
+.login li {
+  margin: 3px 0
+}
+
+.loading {
+  min-height: 100vh;
+  min-height: 100dvh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  color: var(--mut)
+}
+
+.spin {
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  border: 3px solid var(--line2);
+  border-top-color: var(--acc);
+  animation: spin .8s linear infinite
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg)
+  }
+}
+
+/* ================= Profilo ================= */
+.me-side {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch
+}
+
+.hello {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px
+}
+
+.hello h1 {
+  margin-bottom: 6px
+}
+
+.hello .mut {
+  margin: 0 0 14px
+}

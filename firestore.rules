@@ -29,7 +29,15 @@ service cloud.firestore {
         && c.get('theme', '') is string && c.get('theme', '').size() <= 16;
     }
     function cardOk(d) { return !('card' in d) || validCard(d.card); }
-    function nameOk(d) { return !('name' in d) || (d.name is string && d.name.size() <= 80); }
+    // immagine della lega: vuota oppure una vera immagine in base64, non troppo grande
+    function photoOk(d) {
+      return !('photo' in d) || (d.photo is string && d.photo.size() < 200000
+        && (d.photo == '' || d.photo.matches('data:image/(jpeg|png|webp);base64,[A-Za-z0-9+/=]+')));
+    }
+    function nameOk(d) {
+      return (!('name' in d) || (d.name is string && d.name.size() <= 80))
+        && (!('lnick' in d) || (d.lnick is string && d.lnick.size() <= 24));   // soprannome di lega (lo decide l'admin)
+    }
 
     // Il giocatore appartiene a me (vale anche per i vecchi documenti senza campo uid).
     function isOwn(d, m) {
@@ -64,9 +72,10 @@ service cloud.firestore {
       allow create: if signedIn()
         && request.resource.data.admins == [me()]
         && request.resource.data.memberIds == [me()]
-        && request.resource.data.code is string;
+        && request.resource.data.code is string
+        && photoOk(request.resource.data);
 
-      allow update: if (isAdmin(l) && request.resource.data.admins.size() > 0)
+      allow update: if (isAdmin(l) && request.resource.data.admins.size() > 0 && photoOk(request.resource.data))
         // Ingresso con codice: ci si può aggiungere solo da soli, e solo se nello stesso
         // batch si scrive joins/{mio uid} con il codice giusto della lega.
         || (signedIn()
@@ -107,7 +116,15 @@ service cloud.firestore {
       }
 
       match /matches/{x}  { allow read: if isMember(l); allow write: if isAdmin(l); }
-      match /fixtures/{x} { allow read: if isMember(l); allow write: if isAdmin(l); }
+      match /fixtures/{x} {
+        allow read: if isMember(l);
+        allow write: if isAdmin(l);
+        // presenze: ognuno scrive solo la propria risposta (chiave = proprio uid)
+        allow update: if isMember(l)
+          && changed().hasOnly(['rsvp'])
+          && request.resource.data.rsvp.diff(resource.data.get('rsvp', {})).affectedKeys().hasOnly([me()])
+          && request.resource.data.rsvp[me()] in ['yes', 'maybe', 'no'];
+      }
     }
   }
 }
