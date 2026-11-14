@@ -4,7 +4,7 @@
    - Librerie Firebase (URL con versione, non cambiano mai): copia salvata.
    - Tutto il resto (login, database) passa diretto alla rete.
    Se cambi questo file, aumenta VERSION. */
-const VERSION = 'v1';
+const VERSION = 'v2';
 const CACHE = 'calcetto-' + VERSION;
 const CORE = ['./', 'index.html', 'privacy.html', 'manifest.webmanifest', 'icon-192.png', 'icon-512.png', 'favicon-32.png', 'apple-touch-icon.png'];
 
