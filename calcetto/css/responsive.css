@@ -1,0 +1,266 @@
+/* Calcetto Club · adattamento a tablet (≥ 768px) e desktop (≥ 1024px) */
+
+/* ================= Tablet (≥ 768px) ================= */
+@media (min-width:768px) {
+  :root {
+    --gut: 28px
+  }
+
+  .page {
+    max-width: 760px
+  }
+
+  .cards {
+    grid-template-columns: repeat(2, minmax(0, 1fr))
+  }
+
+  .cards.one {
+    grid-template-columns: 1fr
+  }
+
+  .modal {
+    align-items: center;
+    padding: 24px
+  }
+
+  .modal>div {
+    border-radius: var(--r-xl);
+    border-bottom: 1px solid var(--line2);
+    max-height: 88vh;
+    padding: 28px 26px 24px
+  }
+
+  .modal.anim>div {
+    animation: popIn .26s var(--ease)
+  }
+
+  .modal>div::before {
+    display: none
+  }
+
+  .fcard {
+    width: 256px
+  }
+
+  .me-grid {
+    display: grid;
+    grid-template-columns: 280px minmax(0, 1fr);
+    gap: 28px;
+    align-items: start
+  }
+
+  .me-grid>* {
+    min-width: 0
+  }
+
+  .me-main .lgrid {
+    grid-template-columns: minmax(0, 1fr)
+  }
+
+  .me-side {
+    position: sticky;
+    top: 20px
+  }
+
+  .me-side h2:first-child,
+  .me-main h2:first-child {
+    margin-top: 0
+  }
+
+  .lgrid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 10px
+  }
+}
+
+/* ================= Desktop (≥ 1024px): barra laterale ================= */
+@media (min-width:1024px) {
+  :root {
+    --gut: 40px
+  }
+
+  .main {
+    margin-left: var(--side-w);
+    padding-top: 32px;
+    padding-bottom: 48px
+  }
+
+  .page {
+    max-width: 1080px
+  }
+
+  .nav {
+    top: 0;
+    right: auto;
+    width: var(--side-w);
+    height: auto;
+    bottom: 0;
+    flex-direction: column;
+    justify-content: flex-start;
+    padding: 24px 14px;
+    border-top: 0;
+    border-right: 1px solid var(--line);
+    background: rgba(8, 20, 14, .6)
+  }
+
+  .nav .brand {
+    display: flex;
+    padding: 0 10px 26px
+  }
+
+  .nav-items {
+    flex-direction: column;
+    max-width: none;
+    gap: 4px
+  }
+
+  .nav-items button {
+    flex: none;
+    flex-direction: row;
+    justify-content: flex-start;
+    gap: 12px;
+    padding: 12px 14px;
+    border-radius: 12px;
+    font-size: 14px
+  }
+
+  .nav-items button.on {
+    background: var(--acc-soft)
+  }
+
+  .nav-items button.on::before {
+    top: 50%;
+    left: -14px;
+    width: 3px;
+    height: 22px;
+    margin-top: -11px;
+    border-radius: 0 3px 3px 0
+  }
+
+  .nav-items button:not(.on):hover {
+    background: var(--card);
+    color: var(--tx)
+  }
+
+  .nav .nav-foot {
+    display: block;
+    margin-top: auto;
+    padding: 14px 10px 0;
+    border-top: 1px solid var(--line);
+    font-size: 13px;
+    color: var(--mut)
+  }
+
+  .nav-foot b {
+    display: block;
+    color: var(--tx);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis
+  }
+
+  .nav-foot span {
+    display: block;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    margin-bottom: 10px
+  }
+
+  .fab {
+    bottom: 32px;
+    right: 40px
+  }
+
+  .only-mobile {
+    display: none !important
+  }
+
+  .toast {
+    bottom: 32px;
+    left: calc(50% + var(--side-w)/2)
+  }
+
+  .seg {
+    top: 12px
+  }
+
+  .me-grid {
+    grid-template-columns: 300px minmax(0, 1fr);
+    gap: 40px
+  }
+
+  .lgrid {
+    grid-template-columns: repeat(3, minmax(0, 1fr))
+  }
+
+  .fxgrid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 12px
+  }
+
+  .fxgrid>.box {
+    margin: 0
+  }
+
+  /* classifica a tabella */
+  .pl.rank .cols {
+    display: grid;
+    grid-template-columns: repeat(6, 60px);
+    text-align: center;
+    gap: 4px;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums
+  }
+
+  .pl.rank .nm .mut {
+    display: none
+  }
+
+  .pl.rank-head {
+    display: flex;
+    background: none;
+    border: 0;
+    min-height: 0;
+    padding-top: 0;
+    padding-bottom: 2px;
+    font-size: 11px;
+    color: var(--mut);
+    text-transform: uppercase;
+    letter-spacing: .06em;
+    font-weight: 700
+  }
+
+  .pl.rank-head .av,
+  .pl.rank-head .ov {
+    visibility: hidden;
+    height: 0
+  }
+
+  .pl.rank-head .cols {
+    font-weight: 700
+  }
+}
+
+@media (min-width:1280px) {
+  .me-main .lgrid {
+    grid-template-columns: repeat(2, minmax(0, 1fr))
+  }
+}
+
+@media (min-width:1400px) {
+  .cards {
+    grid-template-columns: repeat(3, minmax(0, 1fr))
+  }
+
+  .cards.two {
+    grid-template-columns: repeat(2, minmax(0, 1fr))
+  }
+}
+
+/* record: su schermi larghi stanno tutti in griglia, senza scorrere */
+@media (min-width: 1024px) {
+  .records { grid-auto-flow: row; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); overflow: visible; }
+}
